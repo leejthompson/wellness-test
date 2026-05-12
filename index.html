@@ -1,1 +1,442 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Wellness Test</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+<style>
+/* ---------------------------------------------------------
+   GLOBAL STYLES
+--------------------------------------------------------- */
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 20px;
+}
+
+.container {
+  max-width: 1100px;
+  margin: auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+@media (max-width: 900px) {
+  .container {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  background: #1e293b;
+  padding: 20px;
+  border-radius: 14px;
+  border: 1px solid #334155;
+}
+
+h2 {
+  margin-top: 0;
+  font-size: 1.2rem;
+}
+
+button {
+  padding: 10px 18px;
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.btn-primary {
+  background: #38bdf8;
+  color: #0f172a;
+}
+
+.btn-secondary {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+.status {
+  margin-top: 10px;
+  font-size: 0.9rem;
+  opacity: 0.8;
+}
+
+.timer {
+  font-family: monospace;
+  font-size: 1rem;
+  margin-top: 5px;
+  color: #38bdf8;
+}
+
+.result-box {
+  margin-top: 15px;
+  padding: 12px;
+  background: #0f172a;
+  border-radius: 10px;
+  border: 1px solid #334155;
+}
+
+.word-pill {
+  display: inline-block;
+  padding: 4px 10px;
+  margin: 3px;
+  border-radius: 999px;
+  background: #1e293b;
+  border: 1px solid #475569;
+}
+
+.word-match {
+  background: rgba(34,197,94,0.15);
+  border-color: #22c55e;
+  color: #bbf7d0;
+}
+
+.word-miss {
+  background: rgba(239,68,68,0.15);
+  border-color: #ef4444;
+  color: #fecaca;
+}
+
+canvas {
+  background: #0f172a;
+  border-radius: 50%;
+  border: 1px solid #334155;
+  touch-action: none;
+}
+</style>
+</head>
+
+<body>
+<div class="container">
+
+<!-- ---------------------------------------------------------
+     LEFT PANEL — 3 WORD RECALL
+--------------------------------------------------------- -->
+<div class="panel">
+  <h2>3‑Word Recall</h2>
+
+  <label>Distraction Period:</label>
+  <select id="delaySelect">
+    <option value="30">30 seconds</option>
+    <option value="60">1 minute</option>
+    <option value="120" selected>2 minutes</option>
+    <option value="180">3 minutes</option>
+  </select>
+
+  <br><br>
+
+  <button id="startBtn" class="btn-primary">Start</button>
+  <button id="resetBtn" class="btn-secondary">Reset</button>
+
+  <div class="status" id="statusText">Idle — press Start</div>
+  <div class="timer" id="timerDisplay">00:00</div>
+
+  <div class="result-box" id="resultsBox" style="display:none;">
+    <h3>Results</h3>
+    <div><strong>Program Words:</strong></div>
+    <div id="programWords"></div>
+
+    <div style="margin-top:10px;"><strong>You Said:</strong></div>
+    <div id="userWords"></div>
+
+    <div style="margin-top:10px;" id="summaryText"></div>
+  </div>
+</div>
+
+<!-- ---------------------------------------------------------
+     RIGHT PANEL — CLOCK DRAWING
+--------------------------------------------------------- -->
+<div class="panel">
+  <h2>Clock Drawing</h2>
+
+  <div id="clockTarget" style="font-size:1.1rem; color:#38bdf8;">
+    Target Time: —:—
+  </div>
+
+  <br>
+
+  <canvas id="clockCanvas" width="260" height="260"></canvas>
+
+  <br>
+
+  <button id="clearClock" class="btn-secondary">Clear Drawing</button>
+</div>
+
+</div>
+
+<script>
+/* ---------------------------------------------------------
+   1. WORD LIST (supports 2,000+ words)
+--------------------------------------------------------- */
+const WORDS = [
+  "apple","river","window","garden","pencil","doctor","mountain","ocean","camera","music",
+  "table","mirror","forest","planet","bridge","flower","picture","school","market","letter",
+  "orange","pillow","engine","station","bottle","pocket","shadow","blanket","library","kitchen",
+  "village","island","rocket","battery","helmet","ticket","candle","basket","coffee","piano",
+  "guitar","rabbit","castle","desert","harbor","ladder","notebook","wallet","button","curtain",
+  "statue","tiger","cloud","valley","circle","triangle","hammer","needle","thread","teacher",
+  "driver","pilot","author","dancer","baker","carpet","ceiling","floor","corner","street",
+  "airport","meadow","city","country","planet","galaxy","storm","rainbow","snowflake","volcano"
+];
+
+/* ---------------------------------------------------------
+   2. RANDOM WORD SELECTION
+--------------------------------------------------------- */
+function pickWords() {
+  const chosen = new Set();
+  while (chosen.size < 3) {
+    const idx = Math.floor(Math.random() * WORDS.length);
+    chosen.add(WORDS[idx]);
+  }
+  return Array.from(chosen);
+}
+
+/* ---------------------------------------------------------
+   3. SPEECH SYNTHESIS
+--------------------------------------------------------- */
+function speak(text) {
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = 1.0;
+  speechSynthesis.speak(u);
+}
+
+/* ---------------------------------------------------------
+   4. SPEECH RECOGNITION
+--------------------------------------------------------- */
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognizer = null;
+
+if (SpeechRec) {
+  recognizer = new SpeechRec();
+  recognizer.lang = "en-US";
+  recognizer.interimResults = false;
+}
+
+/* ---------------------------------------------------------
+   5. RECALL LOGIC
+--------------------------------------------------------- */
+let currentWords = [];
+let timerId = null;
+let countdownId = null;
+
+const statusText = document.getElementById("statusText");
+const timerDisplay = document.getElementById("timerDisplay");
+const resultsBox = document.getElementById("resultsBox");
+const programWordsEl = document.getElementById("programWords");
+const userWordsEl = document.getElementById("userWords");
+const summaryText = document.getElementById("summaryText");
+
+function resetAll() {
+  clearTimeout(timerId);
+  clearInterval(countdownId);
+  timerDisplay.textContent = "00:00";
+  statusText.textContent = "Idle — press Start";
+  resultsBox.style.display = "none";
+  speechSynthesis.cancel();
+}
+
+function startCountdown(seconds) {
+  let remaining = seconds;
+  timerDisplay.textContent = formatTime(remaining);
+
+  countdownId = setInterval(() => {
+    remaining--;
+    timerDisplay.textContent = formatTime(remaining);
+    if (remaining <= 0) clearInterval(countdownId);
+  }, 1000);
+}
+
+function formatTime(sec) {
+  const m = String(Math.floor(sec / 60)).padStart(2, "0");
+  const s = String(sec % 60).padStart(2, "0");
+  return `${m}:${s}`;
+}
+
+document.getElementById("startBtn").onclick = () => {
+  resetAll();
+  resultsBox.style.display = "none";
+
+  currentWords = pickWords();
+  statusText.textContent = "Speaking 3 words… listen carefully";
+
+  // Speak words one by one
+  let i = 0;
+  function speakNext() {
+    if (i >= currentWords.length) {
+      beginDelay();
+      return;
+    }
+    speak(currentWords[i]);
+    i++;
+    setTimeout(speakNext, 900);
+  }
+  speakNext();
+
+  generateClockTarget();
+};
+
+function beginDelay() {
+  const delay = parseInt(document.getElementById("delaySelect").value, 10);
+  statusText.textContent = `Distraction period (${delay} seconds)…`;
+
+  startCountdown(delay);
+
+  timerId = setTimeout(() => {
+    speak("What are the three words");
+    beginListening();
+  }, delay * 1000);
+}
+
+function beginListening() {
+  if (!recognizer) {
+    statusText.textContent = "Speech recognition not supported";
+    return;
+  }
+
+  statusText.textContent = "Listening… please say the three words";
+
+  recognizer.start();
+
+  recognizer.onresult = (e) => {
+    const transcript = e.results[0][0].transcript;
+    showResults(transcript);
+  };
+
+  recognizer.onerror = () => {
+    statusText.textContent = "Error capturing speech";
+  };
+}
+
+function showResults(transcript) {
+  statusText.textContent = "Results shown below";
+
+  resultsBox.style.display = "block";
+  programWordsEl.innerHTML = "";
+  userWordsEl.innerHTML = "";
+
+  const userWords = transcript
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+
+  const uniqueUser = [...new Set(userWords)];
+
+  currentWords.forEach(w => {
+    const span = document.createElement("span");
+    span.className = "word-pill";
+    span.textContent = w;
+    if (uniqueUser.includes(w)) span.classList.add("word-match");
+    programWordsEl.appendChild(span);
+  });
+
+  if (uniqueUser.length === 0) {
+    const span = document.createElement("span");
+    span.className = "word-pill word-miss";
+    span.textContent = "(no words detected)";
+    userWordsEl.appendChild(span);
+  } else {
+    uniqueUser.forEach(w => {
+      const span = document.createElement("span");
+      span.className = "word-pill";
+      span.textContent = w;
+      if (currentWords.includes(w)) span.classList.add("word-match");
+      else span.classList.add("word-miss");
+      userWordsEl.appendChild(span);
+    });
+  }
+
+  const correct = currentWords.filter(w => uniqueUser.includes(w)).length;
+  summaryText.textContent = `Matched ${correct} of 3 words.`;
+}
+
+document.getElementById("resetBtn").onclick = resetAll;
+
+/* ---------------------------------------------------------
+   6. CLOCK DRAWING + RANDOM TARGET TIME
+--------------------------------------------------------- */
+const canvas = document.getElementById("clockCanvas");
+const ctx = canvas.getContext("2d");
+let drawing = false;
+let lastX = 0, lastY = 0;
+
+function drawClockFace() {
+  const w = canvas.width;
+  const h = canvas.height;
+  const cx = w / 2;
+  const cy = h / 2;
+  const r = w / 2 - 10;
+
+  ctx.clearRect(0, 0, w, h);
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.strokeStyle = "#475569";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.fillStyle = "#e2e8f0";
+  ctx.font = "14px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  for (let i = 1; i <= 12; i++) {
+    const angle = (Math.PI / 6) * (i - 3);
+    const x = cx + Math.cos(angle) * (r - 20);
+    const y = cy + Math.sin(angle) * (r - 20);
+    ctx.fillText(i, x, y);
+  }
+}
+
+function generateClockTarget() {
+  const hour = Math.floor(Math.random() * 12) + 1;
+  const minute = Math.floor(Math.random() * 12) * 5;
+
+  document.getElementById("clockTarget").textContent =
+    `Target Time: ${hour}:${String(minute).padStart(2,"0")}`;
+
+  drawClockFace();
+}
+
+canvas.addEventListener("mousedown", e => {
+  drawing = true;
+  const rect = canvas.getBoundingClientRect();
+  lastX = e.clientX - rect.left;
+  lastY = e.clientY - rect.top;
+});
+
+canvas.addEventListener("mousemove", e => {
+  if (!drawing) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+
+  ctx.strokeStyle = "#38bdf8";
+  ctx.lineWidth = 2;
+  ctx.lineCap = "round";
+
+  ctx.beginPath();
+  ctx.moveTo(lastX, lastY);
+  ctx.lineTo(x, y);
+  ctx.stroke();
+
+  lastX = x;
+  lastY = y;
+});
+
+canvas.addEventListener("mouseup", () => drawing = false);
+canvas.addEventListener("mouseleave", () => drawing = false);
+
+document.getElementById("clearClock").onclick = drawClockFace;
+
+drawClockFace();
+</script>
+</body>
+</html>
